@@ -10,9 +10,9 @@ use_ok('Debian::Debhelper::Dh_Lib');
 
 sub ok_autoscript_result {
 	ok(-f 'debian/testpackage.postinst.debhelper');
-	open(F, 'debian/testpackage.postinst.debhelper') or die;
-	my (@c) = <F>;
-	close(F) or die;
+	open(my $fd, '<', 'debian/testpackage.postinst.debhelper') or die("open test-poinst: $!");
+	my (@c) = <$fd>;
+	close($fd);
 	like(join('',@c), qr{update-rc\.d test-script test parms with"quote >/dev/null});
 }
 
@@ -29,3 +29,9 @@ ok(autoscript('testpackage', 'postinst', 'postinst-init',
 ok_autoscript_result;
 
 ok(unlink('debian/testpackage.postinst.debhelper') >= 0);
+
+# Local Variables:
+# indent-tabs-mode: t
+# tab-width: 4
+# cperl-indent-level: 4
+# End:

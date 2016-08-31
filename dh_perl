@@ -1,4 +1,4 @@
-#!/usr/bin/perl -w
+#!/usr/bin/perl
 
 =head1 NAME
 
@@ -7,6 +7,7 @@ dh_perl - calculates Perl dependencies and cleans up after MakeMaker
 =cut
 
 use strict;
+use warnings;
 use Config;
 use File::Find;
 use Debian::Debhelper::Dh_Lib;
@@ -80,12 +81,12 @@ foreach (@ARGV) {
 my $perl = 'perl';
 # If -d is given, then the dependency is on perl-base rather than perl.
 $perl .= '-base' if $dh{D_FLAG};
-my $version;
 
 # dependency types
 use constant PROGRAM   => 1;
 use constant PM_MODULE => 2;
 use constant XS_MODULE => 4;
+use constant ARCHDEP_MODULE => 8;
 
 foreach my $package (@{$dh{DOPACKAGES}}) {
 	my $tmp=tmpdir($package);
@@ -101,19 +102,20 @@ foreach my $package (@{$dh{DOPACKAGES}}) {
 		return unless -f;
 		$deps |= PM_MODULE if /\.pm$/;
 		$deps |= XS_MODULE if /\.so$/;
+		$deps |= ARCHDEP_MODULE
+			if $File::Find::dir =~ /\Q$vendorarch\E/;
 	}, @dirs if @dirs;
 
 	# find scripts
 	find sub {
-		return unless -f and (-x or /\.pl$/);
+		return unless -f and (-x _ or /\.pl$/);
 		return if $File::Find::dir=~/\/usr\/share\/doc\//;
-		
-		local *F;
-		return unless open F, $_;
-		if (read F, local $_, 32 and m%^#!\s*(/usr/bin/perl|/usr/bin/env\s+perl)\s%) {
+
+		return unless open(my $fd, '<', $_);
+		if (read($fd, local $_, 32) and m%^#!\s*(/usr/bin/perl|/usr/bin/env\s+perl)\s%) {
 			$deps |= PROGRAM;
 		}
-		close F;
+		close($fd);
 	}, $tmp;
 
 	if ($deps) {
@@ -123,21 +125,25 @@ foreach my $package (@{$dh{DOPACKAGES}}) {
 				unless $version;
 			$version = ">= $version";
 		}
-		
+
+		my $perlarch = $perl;
+		$perlarch .= ':any' if $deps == PROGRAM and not $dh{V_FLAG_SET};
+
 		# no need to depend on an un-versioned perl-base -- it's
 		# essential
-		addsubstvar($package, "perl:Depends", $perl, $version)
+		addsubstvar($package, "perl:Depends", $perlarch, $version)
 			unless $perl eq 'perl-base' && ! length($version);
 
-		# add perlapi-<ver> for XS modules
+		# add perlapi-<ver> for XS modules and other modules
+		# installed into vendorarch
 		addsubstvar($package, "perl:Depends",
 			"perlapi-" . ($Config{debian_abi} || $Config{version}))
-			if $deps & XS_MODULE;
+			if $deps & ( XS_MODULE | ARCHDEP_MODULE );
 	}
 
 	# MakeMaker always makes lib and share dirs, but typically
 	# only one directory is installed into.
-	foreach my $dir ("$tmp/usr/share/perl5", "$tmp/usr/lib/perl5") {
+	foreach my $dir ("$tmp/$vendorlib", "$tmp/$vendorarch") {
 		if (-d $dir) {
 			doit("rmdir", "--ignore-fail-on-non-empty", "--parents",
 				"$dir");
@@ -156,3 +162,9 @@ This program is a part of debhelper.
 Brendan O'Dea <bod@debian.org>
 
 =cut
+
+# Local Variables:
+# indent-tabs-mode: t
+# tab-width: 4
+# cperl-indent-level: 4
+# End:

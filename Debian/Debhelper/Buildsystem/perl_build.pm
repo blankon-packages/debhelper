@@ -7,8 +7,9 @@
 package Debian::Debhelper::Buildsystem::perl_build;
 
 use strict;
+use warnings;
 use Debian::Debhelper::Dh_Lib qw(compat);
-use base 'Debian::Debhelper::Buildsystem';
+use parent qw(Debian::Debhelper::Buildsystem);
 use Config;
 
 sub DESCRIPTION {
@@ -48,7 +49,7 @@ sub configure {
 	if ($ENV{LDFLAGS} && ! compat(8)) {
 		push @flags, "--config", "ld=$Config{ld} $ENV{CFLAGS} $ENV{LDFLAGS}";
 	}
-	$this->do_perl("Build.PL", "--installdirs", "vendor", @flags, @_);
+	$this->do_perl("-I.", "Build.PL", "--installdirs", "vendor", @flags, @_);
 }
 
 sub build {
@@ -58,7 +59,7 @@ sub build {
 
 sub test {
 	my $this=shift;
-	$this->do_perl("Build", "test", @_);
+	$this->do_perl("Build", "test", "--verbose", 1, @_);
 }
 
 sub install {
@@ -75,3 +76,9 @@ sub clean {
 }
 
 1
+
+# Local Variables:
+# indent-tabs-mode: t
+# tab-width: 4
+# cperl-indent-level: 4
+# End:

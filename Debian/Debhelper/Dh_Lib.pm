@@ -1,4 +1,4 @@
-#!/usr/bin/perl -w
+#!/usr/bin/perl
 #
 # Library functions for debhelper programs, perl version.
 #
@@ -6,22 +6,38 @@
 
 package Debian::Debhelper::Dh_Lib;
 use strict;
+use warnings;
 
-use Exporter;
-use vars qw(@ISA @EXPORT %dh);
-@ISA=qw(Exporter);
+use constant {
+	# Lowest compat level supported
+	'MIN_COMPAT_LEVEL' => 5,
+	# Lowest compat level that does *not* cause deprecation
+	# warnings
+	'LOWEST_NON_DEPRECATED_COMPAT_LEVEL' => 5,
+	# Highest compat level permitted
+	'MAX_COMPAT_LEVEL' => 11,
+};
+
+use Exporter qw(import);
+use vars qw(@EXPORT %dh);
 @EXPORT=qw(&init &doit &doit_noerror &complex_doit &verbose_print &error
+            &nonquiet_print &print_and_doit &print_and_doit_noerror
             &warning &tmpdir &pkgfile &pkgext &pkgfilename &isnative
 	    &autoscript &filearray &filedoublearray
 	    &getpackages &basename &dirname &xargs %dh
 	    &compat &addsubstvar &delsubstvar &excludefile &package_arch
-	    &is_udeb &udeb_filename &debhelper_script_subst &escape_shell
+	    &is_udeb &debhelper_script_subst &escape_shell
 	    &inhibit_log &load_log &write_log &commit_override_log
-	    &dpkg_architecture_value &sourcepackage
+	    &dpkg_architecture_value &sourcepackage &make_symlink
 	    &is_make_jobserver_unavailable &clean_jobserver_makeflags
-	    &cross_command &set_buildflags &get_buildoption);
-
-my $max_compat=10;
+	    &cross_command &set_buildflags &get_buildoption
+	    &install_dh_config_file &error_exitcode &package_multiarch
+	    &install_file &install_prog &install_lib &install_dir
+	    &get_source_date_epoch &is_cross_compiling
+	    &generated_file &autotrigger &package_section
+	    &restore_file_on_clean &restore_all_files
+	    &open_gz
+);
 
 # The Makefile changes this if debhelper is installed in a PREFIX.
 my $prefix="/usr";
@@ -59,9 +75,11 @@ sub init {
 	}
 	
 	# Check to see if DH_VERBOSE environment variable was set, if so,
-	# make sure verbose is on.
+	# make sure verbose is on. Otherwise, check DH_QUIET.
 	if (defined $ENV{DH_VERBOSE} && $ENV{DH_VERBOSE} ne "") {
 		$dh{VERBOSE}=1;
+	} elsif (defined $ENV{DH_QUIET} && $ENV{DH_QUIET} ne "") {
+		$dh{QUIET}=1;
 	}
 
 	# Check to see if DH_NO_ACT environment variable was set, if so, 
@@ -106,7 +124,7 @@ sub init {
 # on, if it's exiting successfully.
 my $write_log=1;
 sub END {
-	if ($? == 0 && $write_log) {
+	if ($? == 0 && $write_log && (compat(9, 1) || $ENV{DH_INTERNAL_OVERRIDE})) {
 		write_log(basename($0), @{$dh{DOPACKAGES}});
 	}
 }
@@ -183,7 +201,6 @@ sub inhibit_log {
 # shell, escaping metacharacters and quoting arguments that contain spaces.
 sub escape_shell {
 	my @args=@_;
-	my $line="";
 	my @ret;
 	foreach my $word (@args) {
 		if ($word=~/\s/) {
@@ -209,17 +226,32 @@ sub escape_shell {
 # Run a command, and display the command to stdout if verbose mode is on.
 # Throws error if command exits nonzero.
 #
-# All commands that modifiy files in $TMP should be ran via this 
+# All commands that modify files in $TMP should be run via this
 # function.
 #
 # Note that this cannot handle complex commands, especially anything
 # involving redirection. Use complex_doit instead.
 sub doit {
-	doit_noerror(@_) || _error_exitcode(join(" ", @_));
+	doit_noerror(@_) || error_exitcode(join(" ", @_));
 }
 
 sub doit_noerror {
 	verbose_print(escape_shell(@_));
+
+	if (! $dh{NO_ACT}) {
+		return (system(@_) == 0)
+	}
+	else {
+		return 1;
+	}
+}
+
+sub print_and_doit {
+	print_and_doit_noerror(@_) || error_exitcode(join(" ", @_));
+}
+
+sub print_and_doit_noerror {
+	nonquiet_print(escape_shell(@_));
 
 	if (! $dh{NO_ACT}) {
 		return (system(@_) == 0)
@@ -238,21 +270,45 @@ sub complex_doit {
 	
 	if (! $dh{NO_ACT}) {
 		# The join makes system get a scalar so it forks off a shell.
-		system(join(" ", @_)) == 0 || _error_exitcode(join(" ", @_))
+		system(join(" ", @_)) == 0 || error_exitcode(join(" ", @_))
 	}			
 }
 
-sub _error_exitcode {
+sub error_exitcode {
 	my $command=shift;
 	if ($? == -1) {
 		error("$command failed to to execute: $!");
 	}
 	elsif ($? & 127) {
 		error("$command died with signal ".($? & 127));
-        }
-	else {
+	}
+	elsif ($?) {
 		error("$command returned exit code ".($? >> 8));
 	}
+	else {
+		warning("This tool claimed that $command have failed, but it");
+		warning("appears to have returned 0.");
+		error("Probably a bug in this tool is hiding the actual problem.");
+	}
+}
+
+# Some shortcut functions for installing files and dirs to always
+# have the same owner and mode
+# install_file - installs a non-executable
+# install_prog - installs an executable
+# install_lib  - installs a shared library (some systems may need x-bit, others don't)
+# install_dir  - installs a directory
+sub install_file {
+	doit('install', '-p', '-m0644', @_);
+}
+sub install_prog {
+	doit('install', '-p', '-m0755', @_);
+}
+sub install_lib {
+	doit('install', '-p', '-m0644', @_);
+}
+sub install_dir {
+	doit('install', '-d', @_);
 }
 
 # Run a command that may have a huge number of arguments, like xargs does.
@@ -297,6 +353,15 @@ sub verbose_print {
 	my $message=shift;
 	
 	if ($dh{VERBOSE}) {
+		print "\t$message\n";
+	}
+}
+
+# Print something unless the quiet flag is on
+sub nonquiet_print {
+	my $message=shift;
+
+	if (!$dh{QUIET}) {
 		print "\t$message\n";
 	}
 }
@@ -346,35 +411,44 @@ sub dirname {
 		if (! defined $c) {
 			$c=1;
 			if (-e 'debian/compat') {
-				open (COMPAT_IN, "debian/compat") || error "debian/compat: $!";
-				my $l=<COMPAT_IN>;
-				close COMPAT_IN;
+				open(my $compat_in, '<', "debian/compat") || error "debian/compat: $!";
+				my $l=<$compat_in>;
+				close($compat_in);
 				if (! defined $l || ! length $l) {
-					warning("debian/compat is empty, assuming level $c")
-						unless defined $ENV{DH_COMPAT};
+					error("debian/compat must contain a postive number (found an empty first line)");
+
 				}
 				else {
 					chomp $l;
 					$c=$l;
+					$c =~ s/^\s*+//;
+					$c =~ s/\s*+$//;
+					if ($c !~ m/^\d+$/) {
+						error("debian/compat must contain a postive number (found: \"$c\")");
+					}
 				}
 			}
-			else {
-				warning("No compatibility level specified in debian/compat");
-				warning("This package will soon FTBFS; time to fix it!");
+			elsif (not $nowarn) {
+				error("Please specify the compatibility level in debian/compat");
 			}
 
 			if (defined $ENV{DH_COMPAT}) {
 				$c=$ENV{DH_COMPAT};
 			}
 		}
+		if (not $nowarn) {
+			if ($c < MIN_COMPAT_LEVEL) {
+				error("Compatibility levels before ${\MIN_COMPAT_LEVEL} are no longer supported (level $c requested)");
+			}
 
-		if ($c <= 4 && ! $warned_compat && ! $nowarn) {
-			warning("Compatibility levels before 5 are deprecated (level $c in use)");
-			$warned_compat=1;
-		}
+			if ($c < LOWEST_NON_DEPRECATED_COMPAT_LEVEL && ! $warned_compat) {
+				warning("Compatibility levels before ${\LOWEST_NON_DEPRECATED_COMPAT_LEVEL} are deprecated (level $c in use)");
+				$warned_compat=1;
+			}
 	
-		if ($c > $max_compat) {
-			error("Sorry, but $max_compat is the highest compatibility level supported by this debhelper.");
+			if ($c > MAX_COMPAT_LEVEL) {
+				error("Sorry, but ${\MAX_COMPAT_LEVEL} is the highest compatibility level supported by this debhelper.");
+			}
 		}
 
 		return ($c <= $num);
@@ -388,10 +462,6 @@ sub tmpdir {
 
 	if ($dh{TMPDIR}) {
 		return $dh{TMPDIR};
-	}
-	elsif (compat(1) && $package eq $dh{MAINPACKAGE}) {
-		# This is for back-compatibility with the debian/tmp tradition.
-		return "debian/tmp";
 	}
 	else {
 		return "debian/$package";
@@ -456,11 +526,7 @@ sub pkgfile {
 # Pass it a name of a binary package, it returns the name to prefix to files
 # in debian/ for this package.
 sub pkgext {
-	my $package=shift;
-
-	if (compat(1) and $package eq $dh{MAINPACKAGE}) {
-		return "";
-	}
+	my ($package) = @_;
 	return "$package.";
 }
 
@@ -493,15 +559,15 @@ sub pkgfilename {
 			$isnative_changelog="debian/changelog";
 		}
 		# Get the package version.
-		my $version=`dpkg-parsechangelog -l$isnative_changelog`;
-		($dh{VERSION})=$version=~m/Version:\s*(.*)/m;
+		my $version=`dpkg-parsechangelog -l$isnative_changelog -SVersion`;
+		chomp($dh{VERSION} = $version);
 		# Did the changelog parse fail?
-		if (! defined $dh{VERSION}) {
+		if ($dh{VERSION} eq q{}) {
 			error("changelog parse failure");
 		}
 
 		# Is this a native Debian package?
-		if ($dh{VERSION}=~m/.*-/) {
+		if (index($dh{VERSION}, '-') > -1) {
 			return $isnative_cache{$package}=0;
 		}
 		else {
@@ -564,15 +630,67 @@ sub autoscript_sed {
 	my $infile = shift;
 	my $outfile = shift;
 	if (ref($sed) eq 'CODE') {
-		open(IN, $infile) or die "$infile: $!";
-		open(OUT, ">>$outfile") or die "$outfile: $!";
-		while (<IN>) { $sed->(); print OUT }
-		close(OUT) or die "$outfile: $!";
-		close(IN) or die "$infile: $!";
+		open(my $in, '<', $infile) or die "$infile: $!";
+		open(my $out, '>>', $outfile) or die "$outfile: $!";
+		while (<$in>) { $sed->(); print {$out} $_; }
+		close($out) or die "$outfile: $!";
+		close($in) or die "$infile: $!";
 	}
 	else {
 		complex_doit("sed \"$sed\" $infile >> $outfile");
 	}
+}
+
+# Adds a trigger to the package
+{
+	my %VALID_TRIGGER_TYPES = map { $_ => 1 } qw(
+		interest interest-await interest-noawait
+		activate activate-await activate-noawait
+	);
+
+	sub autotrigger {
+		my ($package, $trigger_type, $trigger_target) = @_;
+		my ($triggers_file, $ifd);
+
+		if (not exists($VALID_TRIGGER_TYPES{$trigger_type})) {
+			require Carp;
+			Carp::confess("Invalid/unknown trigger ${trigger_type}");
+		}
+		return if $dh{NO_ACT};
+
+		$triggers_file = generated_file($package, 'triggers');
+		if ( -f $triggers_file ) {
+			open($ifd, '<', $triggers_file)
+				or error("open $triggers_file failed $!");
+		} else {
+			open($ifd, '<', '/dev/null')
+				or error("open /dev/null failed $!");
+		}
+		open(my $ofd, '>', "${triggers_file}.new")
+			or error("open ${triggers_file}.new failed: $!");
+		while (my $line = <$ifd>) {
+			next if $line =~ m{\A  \Q${triggers_file}\E  \s+
+                                   \Q${trigger_target}\E (?:\s|\Z)
+                              }x;
+			print {$ofd} $line;
+		}
+		print {$ofd} '# Triggers added by ' . basename($0) . "\n";
+		print {$ofd} "${trigger_type} ${trigger_target}\n";
+		close($ofd) or error("closing ${triggers_file}.new failed: $!");
+		close($ifd);
+		doit('mv', '-f', "${triggers_file}.new", $triggers_file);
+	}
+}
+
+sub generated_file {
+	my ($package, $filename, $mkdirs) = @_;
+	my $dir = "debian/.debhelper/generated/${package}";
+	my $path = "${dir}/${filename}";
+	$mkdirs //= 1;
+	if ($mkdirs and not -d $dir) {
+		install_dir($dir);
+	}
+	return $path;
 }
 
 # Removes a whole substvar line.
@@ -584,7 +702,7 @@ sub delsubstvar {
 	my $substvarfile="debian/${ext}substvars";
 
 	if (-e $substvarfile) {
-		complex_doit("grep -s -v '^${substvar}=' $substvarfile > $substvarfile.new || true");
+		complex_doit("grep -a -s -v '^${substvar}=' $substvarfile > $substvarfile.new || true");
 		doit("mv", "$substvarfile.new","$substvarfile");
 	}
 }
@@ -608,8 +726,8 @@ sub addsubstvar {
 	my $line="";
 	if (-e $substvarfile) {
 		my %items;
-		open(SUBSTVARS_IN, "$substvarfile") || error "read $substvarfile: $!";
-		while (<SUBSTVARS_IN>) {
+		open(my $in, '<', $substvarfile) || error "read $substvarfile: $!";
+		while (<$in>) {
 			chomp;
 			if (/^\Q$substvar\E=(.*)/) {
 				%items = map { $_ => 1} split(", ", $1);
@@ -617,7 +735,7 @@ sub addsubstvar {
 				last;
 			}
 		}
-		close SUBSTVARS_IN;
+		close($in);
 		if (! $remove) {
 			$items{$str}=1;
 		}
@@ -631,7 +749,7 @@ sub addsubstvar {
 	}
 
 	if (length $line) {
-		 complex_doit("(grep -s -v ${substvar} $substvarfile; echo ".escape_shell("${substvar}=$line").") > $substvarfile.new");
+		 complex_doit("(grep -a -s -v ${substvar} $substvarfile; echo ".escape_shell("${substvar}=$line").") > $substvarfile.new");
 		 doit("mv", "$substvarfile.new", $substvarfile);
 	}
 	else {
@@ -653,26 +771,26 @@ sub filedoublearray {
 	if ($x) {
 		require Cwd;
 		my $cmd=Cwd::abs_path($file);
+		$ENV{"DH_CONFIG_ACT_ON_PACKAGES"} = join(",", @{$dh{"DOPACKAGES"}});
 		open (DH_FARRAY_IN, "$cmd |") || error("cannot run $file: $!");
+		delete $ENV{"DH_CONFIG_ACT_ON_PACKAGES"};
 	}
 	else {
-		open (DH_FARRAY_IN, $file) || error("cannot read $file: $!");
+		open (DH_FARRAY_IN, '<', $file) || error("cannot read $file: $!");
 	}
 
 	my @ret;
 	while (<DH_FARRAY_IN>) {
 		chomp;
 		# Only ignore comments and empty lines in v5 mode.
-		if (! compat(4) && ! $x)  {
+		if (not $x)  {
 			next if /^#/ || /^$/;
 		}
 		my @line;
-		# Only do glob expansion in v3 mode.
-		#
 		# The tricky bit is that the glob expansion is done
 		# as if we were in the specified directory, so the
 		# filenames that come out are relative to it.
-		if (defined $globdir && ! compat(2) && ! $x) {
+		if (defined($globdir) && ! $x) {
 			foreach (map { glob "$globdir/$_" } split) {
 				s#^$globdir/##;
 				push @line, $_;
@@ -684,7 +802,14 @@ sub filedoublearray {
 		push @ret, [@line];
 	}
 
-	close DH_FARRAY_IN || error("problem reading $file: $!");
+	if (!close(DH_FARRAY_IN)) {
+		if ($x) {
+			error("Error closing fd/process for $file: $!") if $!;
+			error_exitcode("$file (executable config)");
+		} else {
+			error("problem reading $file: $!");
+		}
+	}
 	
 	return @ret;
 }
@@ -708,7 +833,10 @@ sub excludefile {
 	my %dpkg_arch_output;
 	sub dpkg_architecture_value {
 		my $var = shift;
-		if (! exists($dpkg_arch_output{$var})) {
+		if (exists($ENV{$var})) {
+			return $ENV{$var};
+		}
+		elsif (! exists($dpkg_arch_output{$var})) {
 			local $_;
 			open(PIPE, '-|', 'dpkg-architecture')
 				or error("dpkg-architecture failed");
@@ -733,6 +861,12 @@ sub buildos {
 	dpkg_architecture_value("DEB_HOST_ARCH_OS");
 }
 
+# Returns a truth value if this seems to be a cross-compile
+sub is_cross_compiling {
+	return dpkg_architecture_value("DEB_BUILD_GNU_TYPE")
+	    ne dpkg_architecture_value("DEB_HOST_GNU_TYPE");
+}
+
 # Passed an arch and a list of arches to match against, returns true if matched
 {
 	my %knownsame;
@@ -742,17 +876,13 @@ sub buildos {
 		my @archlist=split(/\s+/,shift);
 	
 		foreach my $a (@archlist) {
-			# Avoid expensive dpkg-architecture call to compare
-			# with a simple architecture name. "linux-any" and
-			# other architecture wildcards are (currently)
-			# always hypenated.
-			if ($a !~ /-/) {
-				return 1 if $arch eq $a;
-			}
-			elsif (exists $knownsame{$arch}{$a}) {
+			if (exists $knownsame{$arch}{$a}) {
 				return 1 if $knownsame{$arch}{$a};
+				next;
 			}
-			elsif (system("dpkg-architecture", "-a$arch", "-i$a") == 0) {
+
+			require Dpkg::Arch;
+			if (Dpkg::Arch::debarch_is($arch, $a)) {
 				return $knownsame{$arch}{$a}=1;
 			}
 			else {
@@ -764,58 +894,20 @@ sub buildos {
 	}
 }
 
-# Passed a list of profiles to match against, returns true if
-# DEB_BUILD_PROFILES environment variable matched
-sub buildprofilesmatch {
-	my %debbuildprofiles = ();
-	if (exists $ENV{'DEB_BUILD_PROFILES'}) {
-		foreach my $profile (split(/\s+/, $ENV{'DEB_BUILD_PROFILES'})) {
-			$debbuildprofiles{$profile} = 1;
-		}
-	}
-
-	my $packageprofilesstr = shift;
-	my $package = shift;
-	my @packageprofiles = split(/\s+/, $packageprofilesstr);
-	my $err = sub { error("Build-Profiles field for package $package contains both positive and negative entries"); };
-	if ($#packageprofiles < 0 || $packageprofiles[0] =~ /^!/) {
-		# package profiles list is negative or empty
-		foreach my $packageprofile (@packageprofiles) {
-			$packageprofile =~ /^!(.*)$/ || &{$err}();
-			if ($debbuildprofiles{$1}) {
-				return 0;
-			}
-		}
-		return 1;
-	}
-	else {
-		# package profiles list is positive
-		foreach my $packageprofile (@packageprofiles) {
-			if ($packageprofile =~ /^!/) {
-				&{$err}();
-			}
-			if ($debbuildprofiles{$packageprofile}) {
-				return 1;
-			}
-		}
-		return 0;
-	}
-}
-
 # Returns source package name
 sub sourcepackage {
-	open (CONTROL, 'debian/control') ||
+	open (my $fd, '<', 'debian/control') ||
 	    error("cannot read debian/control: $!\n");
-	while (<CONTROL>) {
+	while (<$fd>) {
 		chomp;
 		s/\s+$//;
-		if (/^Source:\s*(.*)/) {
-			close CONTROL;
+		if (/^Source:\s*(.*)/i) {
+			close($fd);
 			return $1;
 		}
 	}
 
-	close CONTROL;
+	close($fd);
 	error("could not find Source: line in control file.");
 }
 
@@ -824,30 +916,39 @@ sub sourcepackage {
 # for the system's arch) or independant. If nothing is specified,
 # returns all packages. Also, "both" returns the union of "arch" and "indep"
 # packages.
-# As a side effect, populates %package_arches and %package_types with the
-# types of all packages (not only those returned).
-my (%package_types, %package_arches, %package_profiles);
+#
+# As a side effect, populates %package_arches and %package_types
+# with the types of all packages (not only those returned).
+my (%package_types, %package_arches, %package_multiarches, %packages_by_type,
+    %package_sections);
 sub getpackages {
-	my $type=shift;
+	my ($type) = @_;
+	error("getpackages: First argument must be one of \"arch\", \"indep\", or \"both\"")
+		if defined($type) and $type ne 'both' and $type ne 'indep' and $type ne 'arch';
 
-	%package_types=();
-	%package_arches=();
-	%package_profiles=();
+	$type //= 'all-listed-in-control-file';
+
+	if (%packages_by_type) {
+		return @{$packages_by_type{$type}};
+	}
+
+	$packages_by_type{$_} = [] for qw(both indep arch all-listed-in-control-file);
 	
-	$type="" if ! defined $type;
 
 	my $package="";
 	my $arch="";
-	my $package_type;
-	my $build_profiles;
-	my @list=();
-	my %seen;
-	open (CONTROL, 'debian/control') ||
+	my $section="";
+	my ($package_type, $multiarch, %seen, @profiles, $source_section,
+		$included_in_build_profile);
+	if (exists $ENV{'DEB_BUILD_PROFILES'}) {
+		@profiles=split /\s+/, $ENV{'DEB_BUILD_PROFILES'};
+	}
+	open (my $fd, '<', 'debian/control') ||
 		error("cannot read debian/control: $!\n");
-	while (<CONTROL>) {
+	while (<$fd>) {
 		chomp;
 		s/\s+$//;
-		if (/^Package:\s*(.*)/) {
+		if (/^Package:\s*(.*)/i) {
 			$package=$1;
 			# Detect duplicate package names in the same control file.
 			if (! $seen{$package}) {
@@ -857,41 +958,65 @@ sub getpackages {
 				error("debian/control has a duplicate entry for $package");
 			}
 			$package_type="deb";
-			$build_profiles="";
+			$included_in_build_profile=1;
 		}
-		if (/^Architecture:\s*(.*)/) {
+		if (/^Section:\s(.*)\s*$/i) {
+			$section = $1;
+		}
+		if (/^Architecture:\s*(.*)/i) {
 			$arch=$1;
 		}
-		if (/^(?:X[BC]*-)?Package-Type:\s*(.*)/) {
+		if (/^(?:X[BC]*-)?Package-Type:\s*(.*)/i) {
 			$package_type=$1;
 		}
-		if (/^Build-Profiles:\s*(.*)/) {
-		        $build_profiles=$1;
+		if (/^Multi-Arch: \s*(.*)\s*/i) {
+			$multiarch = $1;
+		}
+		# rely on libdpkg-perl providing the parsing functions because
+		# if we work on a package with a Build-Profiles field, then a
+		# high enough version of dpkg-dev is needed anyways
+		if (/^Build-Profiles:\s*(.*)/i) {
+		        my $build_profiles=$1;
+			eval {
+				require Dpkg::BuildProfiles;
+				my @restrictions=Dpkg::BuildProfiles::parse_build_profiles($build_profiles);
+				if (@restrictions) {
+					$included_in_build_profile=Dpkg::BuildProfiles::evaluate_restriction_formula(\@restrictions, \@profiles);
+				}
+			};
+			if ($@) {
+				error("The control file has a Build-Profiles field. Requires libdpkg-perl >= 1.17.14");
+			}
 		}
 
 		if (!$_ or eof) { # end of stanza.
 			if ($package) {
 				$package_types{$package}=$package_type;
 				$package_arches{$package}=$arch;
-				$package_profiles{$package}=$build_profiles;
+				$package_multiarches{$package} = $multiarch;
+				$package_sections{$package} = $section || $source_section;
+				if ($included_in_build_profile) {
+					push(@{$packages_by_type{'all-listed-in-control-file'}}, $package);
+					if ($arch eq 'all') {
+						push(@{$packages_by_type{'indep'}}, $package);
+						push(@{$packages_by_type{'both'}}, $package);
+					} elsif ($arch eq 'any' ||
+							 ($arch ne 'all' && samearch(buildarch(), $arch))) {
+						push(@{$packages_by_type{'arch'}}, $package);
+						push(@{$packages_by_type{'both'}}, $package);
+					}
+				}
+			} elsif ($section and not defined($source_section)) {
+				$source_section = $section;
 			}
-
-			if ($package &&
-			    ((($type eq 'indep' || $type eq 'both') && $arch eq 'all') ||
-			     (($type eq 'arch'  || $type eq 'both') && ($arch eq 'any' ||
-					     ($arch ne 'all' &&
-			                      samearch(buildarch(), $arch)))) ||
-			     ! $type) &&
-			    buildprofilesmatch($build_profiles, $package)) {
-				push @list, $package;
-				$package="";
-				$arch="";
-			}
+			$package='';
+			$arch='';
+			$section='';
 		}
 	}
-	close CONTROL;
+	close($fd);
 
-	return @list;
+	return @{$packages_by_type{$type}};
 }
 
 # Returns the arch a package will build for.
@@ -905,6 +1030,33 @@ sub package_arch {
 	return $package_arches{$package} eq 'all' ? "all" : buildarch();
 }
 
+# Returns the multiarch value of a package.
+sub package_multiarch {
+	my $package=shift;
+
+	# Test the architecture field instead, as it is common for a
+	# package to not have a multi-arch value.
+	if (! exists $package_arches{$package}) {
+		warning "package $package is not in control info";
+		# The only sane default
+		return 'no';
+	}
+	return $package_multiarches{$package} // 'no';
+}
+
+# Returns the (raw) section value of a package (possibly including component).
+sub package_section {
+	my ($package) = @_;
+
+	# Test the architecture field instead, as it is common for a
+	# package to not have a multi-arch value.
+	if (! exists $package_sections{$package}) {
+		warning "package $package is not in control info";
+		return 'unknown';
+	}
+	return $package_sections{$package} // 'unknown';
+}
+
 # Return true if a given package is really a udeb.
 sub is_udeb {
 	my $package=shift;
@@ -914,17 +1066,6 @@ sub is_udeb {
 		return 0;
 	}
 	return $package_types{$package} eq 'udeb';
-}
-
-# Generates the filename that is used for a udeb package.
-sub udeb_filename {
-	my $package=shift;
-	
-	my $filearch=package_arch($package);
-	isnative($package); # side effect
-	my $version=$dh{VERSION};
-	$version=~s/^[0-9]+://; # strip any epoch
-	return "${package}_${version}_$filearch.udeb";
 }
 
 # Handles #DEBHELPER# substitution in a script; also can generate a new
@@ -947,21 +1088,112 @@ sub debhelper_script_subst {
 			complex_doit("sed s/#DEBHELPER#// < $file > $tmp/DEBIAN/$script");
 		}
 		doit("chown","0:0","$tmp/DEBIAN/$script");
-		doit("chmod",755,"$tmp/DEBIAN/$script");
+		doit("chmod","0755","$tmp/DEBIAN/$script");
 	}
 	elsif ( -f "debian/$ext$script.debhelper" ) {
 		complex_doit("printf '#!/bin/sh\nset -e\n' > $tmp/DEBIAN/$script");
 		complex_doit("cat debian/$ext$script.debhelper >> $tmp/DEBIAN/$script");
 		doit("chown","0:0","$tmp/DEBIAN/$script");
-		doit("chmod",755,"$tmp/DEBIAN/$script");
+		doit("chmod","0755","$tmp/DEBIAN/$script");
 	}
+}
+
+
+# make_symlink($dest, $src[, $tmp]) creates a symlink from  $dest -> $src.
+# if $tmp is given, $dest will be created within it.
+# Usually $tmp should be the value of tmpdir($package);
+sub make_symlink{
+	my $dest = shift;
+	my $src = _expand_path(shift);
+	my $tmp = shift;
+        $tmp = '' if not defined($tmp);
+	$src=~s:^/::;
+	$dest=~s:^/::;
+
+	if ($src eq $dest) {
+		warning("skipping link from $src to self");
+		return;
+	}
+
+	# Make sure the directory the link will be in exists.
+	my $basedir=dirname("$tmp/$dest");
+	if (! -e $basedir) {
+		install_dir($basedir);
+	}
+
+	# Policy says that if the link is all within one toplevel
+	# directory, it should be relative. If it's between
+	# top level directories, leave it absolute.
+	my @src_dirs=split(m:/+:,$src);
+	my @dest_dirs=split(m:/+:,$dest);
+	if (@src_dirs > 0 && $src_dirs[0] eq $dest_dirs[0]) {
+		# Figure out how much of a path $src and $dest
+		# share in common.
+		my $x;
+		for ($x=0; $x < @src_dirs && $src_dirs[$x] eq $dest_dirs[$x]; $x++) {}
+		# Build up the new src.
+		$src="";
+		for (1..$#dest_dirs - $x) {
+			$src.="../";
+		}
+		for ($x .. $#src_dirs) {
+			$src.=$src_dirs[$_]."/";
+		}
+		if ($x > $#src_dirs && ! length $src) {
+			$src="."; # special case
+		}
+		$src=~s:/$::;
+	}
+	else {
+		# Make sure it's properly absolute.
+		$src="/$src";
+	}
+
+	if (-d "$tmp/$dest" && ! -l "$tmp/$dest") {
+		error("link destination $tmp/$dest is a directory");
+	}
+	doit("rm", "-f", "$tmp/$dest");
+	doit("ln","-sf", $src, "$tmp/$dest");
+}
+
+# _expand_path expands all path "." and ".." components, but doesn't
+# resolve symbolic links.
+sub _expand_path {
+	my $start = @_ ? shift : '.';
+	my @pathname = split(m:/+:,$start);
+	my @respath;
+	for my $entry (@pathname) {
+		if ($entry eq '.' || $entry eq '') {
+			# Do nothing
+		}
+		elsif ($entry eq '..') {
+			if ($#respath == -1) {
+				# Do nothing
+			}
+			else {
+				pop @respath;
+			}
+		}
+		else {
+			push @respath, $entry;
+		}
+	}
+
+	my $result;
+	for my $entry (@respath) {
+		$result .= '/' . $entry;
+	}
+	if (! defined $result) {
+		$result="/"; # special case
+	}
+	return $result;
 }
 
 # Checks if make's jobserver is enabled via MAKEFLAGS, but
 # the FD used to communicate with it is actually not available.
 sub is_make_jobserver_unavailable {
 	if (exists $ENV{MAKEFLAGS} && 
-	    $ENV{MAKEFLAGS} =~ /(?:^|\s)--jobserver-fds=(\d+)/) {
+	    $ENV{MAKEFLAGS} =~ /(?:^|\s)--jobserver-(?:fds|auth)=(\d+)/) {
 		if (!open(my $in, "<&$1")) {
 			return 1; # unavailable
 		}
@@ -977,8 +1209,8 @@ sub is_make_jobserver_unavailable {
 # Cleans out jobserver options from MAKEFLAGS.
 sub clean_jobserver_makeflags {
 	if (exists $ENV{MAKEFLAGS}) {
-		if ($ENV{MAKEFLAGS} =~ /(?:^|\s)--jobserver-fds=(\d+)/) {
-			$ENV{MAKEFLAGS} =~ s/(?:^|\s)--jobserver-fds=\S+//g;
+		if ($ENV{MAKEFLAGS} =~ /(?:^|\s)--jobserver-(?:fds|auth)=\d+/) {
+			$ENV{MAKEFLAGS} =~ s/(?:^|\s)--jobserver-(?:fds|auth)=\S+//g;
 			$ENV{MAKEFLAGS} =~ s/(?:^|\s)-j\b//g;
 		}
 		delete $ENV{MAKEFLAGS} if $ENV{MAKEFLAGS} =~ /^\s*$/;
@@ -988,8 +1220,7 @@ sub clean_jobserver_makeflags {
 # If cross-compiling, returns appropriate cross version of command.
 sub cross_command {
 	my $command=shift;
-	if (dpkg_architecture_value("DEB_BUILD_GNU_TYPE")
-	    ne dpkg_architecture_value("DEB_HOST_GNU_TYPE")) {
+	if (is_cross_compiling()) {
 		return dpkg_architecture_value("DEB_HOST_GNU_TYPE")."-$command";
 	}
 	else {
@@ -997,11 +1228,47 @@ sub cross_command {
 	}
 }
 
+# Returns the SOURCE_DATE_EPOCH ENV variable if set OR computes it
+# from the latest changelog entry, sets the SOURCE_DATE_EPOCH ENV
+# variable and returns the computed value.
+sub get_source_date_epoch {
+	return $ENV{SOURCE_DATE_EPOCH} if exists($ENV{SOURCE_DATE_EPOCH});
+	eval "use Dpkg::Changelog::Debian";
+	if ($@) {
+		warning "unable to set SOURCE_DATE_EPOCH: $@";
+		return;
+	}
+	eval "use Time::Piece";
+	if ($@) {
+		warning "unable to set SOURCE_DATE_EPOCH: $@";
+		return;
+	}
+
+	my $changelog = Dpkg::Changelog::Debian->new(range => {"count" => 1});
+	$changelog->load("debian/changelog");
+
+	my $tt = @{$changelog}[0]->get_timestamp();
+	$tt =~ s/\s*\([^\)]+\)\s*$//; # Remove the optional timezone codename
+	my $timestamp = Time::Piece->strptime($tt, "%a, %d %b %Y %T %z");
+
+	return $ENV{SOURCE_DATE_EPOCH} = $timestamp->epoch();
+}
+
 # Sets environment variables from dpkg-buildflags. Avoids changing
 # any existing environment variables.
 sub set_buildflags {
-	return if $ENV{DH_INTERNAL_BUILDFLAGS} || compat(8);
+	return if $ENV{DH_INTERNAL_BUILDFLAGS};
 	$ENV{DH_INTERNAL_BUILDFLAGS}=1;
+
+	# For the side effect of computing the SOURCE_DATE_EPOCH variable.
+	get_source_date_epoch();
+
+	return if compat(8);
+
+	# Export PERL_USE_UNSAFE_INC as a transitional step to allow us
+	# to remove . from @INC by default without breaking packages which
+	# rely on this [CVE-2016-1238]
+	$ENV{PERL_USE_UNSAFE_INC}=1;
 
 	eval "use Dpkg::BuildFlags";
 	if ($@) {
@@ -1036,4 +1303,133 @@ sub get_buildoption {
 	}
 }
 
+# install a dh config file (e.g. debian/<pkg>.lintian-overrides) into
+# the package.  Under compat 9+ it may execute the file and use its
+# output instead.
+#
+# install_dh_config_file(SOURCE, TARGET[, MODE])
+sub install_dh_config_file {
+	my ($source, $target, $mode) = @_;
+	$mode = 0644 if not defined($mode);
+
+	if (!compat(8) and -x $source) {
+		my @sstat = stat(_) || error("cannot stat $source: $!");
+		open(my $tfd, '>', $target) || error("cannot open $target: $!");
+		chmod($mode, $tfd) || error("cannot chmod $target: $!");
+		open(my $sfd, '-|', $source) || error("cannot run $source: $!");
+		while (my $line = <$sfd>) {
+			print ${tfd} $line;
+		}
+		if (!close($sfd)) {
+			error("cannot close handle from $source: $!") if $!;
+			error_exitcode($source);
+		}
+		close($tfd) || error("cannot close $target: $!");
+		# Set the mtime (and atime) to ensure reproducibility.
+		utime($sstat[9], $sstat[9], $target);
+	} else {
+		my $str_mode = sprintf('%#4o', $mode);
+		doit('install', '-p', "-m${str_mode}", $source, $target);
+	}
+	return 1;
+}
+
+sub restore_file_on_clean {
+	my ($file) = @_;
+	my $bucket_index = 'debian/.debhelper/bucket/index';
+	my $bucket_dir = 'debian/.debhelper/bucket/files';
+	my $checksum;
+	if (not -d $bucket_dir) {
+		install_dir($bucket_dir);
+	}
+	if ($file =~ m{^/}) {
+		error("restore_file_on_clean requires a path relative to the package dir");
+	}
+	$file =~ s{^\./}{}g;
+	$file =~ s{//++}{}g;
+	if ($file =~ m{^\.} or $file =~ m{/CVS/} or $file =~ m{/\.svn/}) {
+		# We do not want to smash a Vcs repository by accident.
+		warning("Attempt to store $file, which looks like a VCS file or");
+		warning("a hidden package file (like quilt's \".pc\" directory");
+		error("This tool probably contains a bug.");
+	}
+	if (-l $file or not -f _) {
+		error("Cannot store $file, which is a non-file (incl. a symlink)");
+	}
+	require Digest::SHA;
+
+	$checksum = Digest::SHA->new('256')->addfile($file, 'b')->hexdigest;
+
+	if (not $dh{NO_ACT}) {
+		my ($in_index);
+		open(my $fd, '+>>', $bucket_index)
+			or error("open($bucket_index, a+) failed: $!");
+		seek($fd, 0, 0);
+		while (my $line = <$fd>) {
+			my ($cs, $stored_file);
+			chomp($line);
+			($cs, $stored_file) = split(m/ /, $line, 2);
+			next if ($stored_file ne $file);
+			$in_index = 1;
+		}
+		if (not $in_index) {
+			# Copy and then rename so we always have the full copy of
+			# the file in the correct place (if any at all).
+			doit('cp', '-an', '--reflink=auto', $file, "${bucket_dir}/${checksum}.tmp");
+			doit('mv', '-f', "${bucket_dir}/${checksum}.tmp", "${bucket_dir}/${checksum}");
+			print {$fd} "${checksum} ${file}\n";
+		}
+		close($fd) or error("close($bucket_index) failed: $!");
+	}
+
+	return 1;
+}
+
+sub restore_all_files {
+	my $bucket_index = 'debian/.debhelper/bucket/index';
+	my $bucket_dir = 'debian/.debhelper/bucket/files';
+
+	return if not -f $bucket_index;
+	open(my $fd, '<', $bucket_index)
+		or error("open($bucket_index) failed: $!");
+
+	while (my $line = <$fd>) {
+		my ($cs, $stored_file, $bucket_file);
+		chomp($line);
+		($cs, $stored_file) = split(m/ /, $line, 2);
+		$bucket_file = "${bucket_dir}/${cs}";
+		# Restore by copy and then rename.  This ensures that:
+		# 1) If dh_clean is interrupted, we can always do a full restore again
+		#    (otherwise, we would be missing some of the files and have to handle
+		#     that with scary warnings)
+		# 2) The file is always fully restored or in its "pre-restore" state.
+		doit('cp', '-an', '--reflink=auto', $bucket_file, "${bucket_file}.tmp");
+		doit('mv', '-Tf', "${bucket_file}.tmp", $stored_file);
+	}
+	close($fd);
+	return;
+}
+
+sub open_gz {
+	my ($file) = @_;
+	my $fd;
+	eval {
+		require PerlIO::gzip;
+	};
+	if ($@) {
+		open($fd, '-|', 'gzip', '-dc', $file)
+		  or die("gzip -dc $file failed: $!");
+	} else {
+		open($fd, '<:gzip', $file)
+		  or die("open $file [<:gzip] failed: $!");
+	}
+	return $fd;
+}
+
 1
+
+# Local Variables:
+# indent-tabs-mode: t
+# tab-width: 4
+# cperl-indent-level: 4
+# End:

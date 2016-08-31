@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 
-use Test::More tests => 297;
+use Test::More tests => 300;
 
 use strict;
 use warnings;
@@ -264,7 +264,7 @@ test_check_auto_buildable($bs{perl_makemaker}, "Makefile.PL", { configure => 1 }
 # With Makefile
 touch "$builddir/Makefile";
 test_check_auto_buildable($bs{makefile}, "Makefile", 1);
-test_check_auto_buildable($bs{autoconf}, "configure+Makefile", { configure => 1 });
+test_check_auto_buildable($bs{autoconf}, "configure+Makefile", { configure => 1, test => 1 });
 test_check_auto_buildable($bs{cmake}, "CMakeLists.txt+Makefile", 1);
 touch "$builddir/CMakeCache.txt"; # strong evidence that cmake was run
 test_check_auto_buildable($bs{cmake}, "CMakeCache.txt+Makefile", 2);
@@ -295,7 +295,7 @@ sub test_autoselection {
 	my $expected=shift;
 	my %args=@_;
 	for my $step (@STEPS) {
-		my $bs = load_buildsystem(undef, $step, @_);
+		my $bs = load_buildsystem({'enable-thirdparty' => 0}, $step, @_);
 		my $e = $expected;
 		$e = $expected->{$step} if ref $expected;
 		if (defined $bs) {
@@ -317,7 +317,7 @@ touch "$tmpdir/configure", 0755;
 touch "$builddir/Makefile";
 test_autoselection("autoconf",
     { configure => "autoconf", build => "makefile",
-      test => "makefile", install => "makefile", clean => "makefile" }, %tmp);
+      test => "autoconf", install => "makefile", clean => "makefile" }, %tmp);
 cleandir $tmpdir;
 
 # Perl Makemaker (build, test, clean fail with builddir set [not supported])
@@ -466,19 +466,27 @@ sub dh_auto_do_autoconf {
 	@extra_args = &$do_dh_auto('configure');
 	ok ( -f "$buildpath/Makefile", "$buildpath/Makefile exists" );
 	@lines=();
-	if (ok( open(FILE, "$buildpath/stamp_configure"), "$buildpath/stamp_configure exists") ) {
+	if ( ok(open(FILE, '<', "$buildpath/stamp_configure"), "$buildpath/stamp_configure exists") ) {
 		@lines = @{readlines(\*FILE)};
+		close(FILE);
 	}
 	is_deeply( \@lines, \@extra_args, "$buildpath/stamp_configure contains extra args" );
 
 	&$do_dh_auto('build');
 	ok ( -f "$buildpath/stamp_build", "$buildpath/stamp_build exists" );
 	&$do_dh_auto('test');
-	ok ( -f "$buildpath/stamp_test", "$buildpath/stamp_test exists" );
+	@lines=();
+	if ( ok(open(FILE, '<', "$buildpath/stamp_test"), "$buildpath/stamp_test exists") ) {
+		@lines = @{readlines(\*FILE)};
+		close(FILE);
+	}
+	is_deeply( \@lines, [ "VERBOSE=1" ],
+	    "$buildpath/stamp_test contains VERBOSE=1" );
 	&$do_dh_auto('install');
 	@lines=();
-	if ( ok(open(FILE, "$buildpath/stamp_install"), "$buildpath/stamp_install exists") ) {
+	if ( ok(open(FILE, '<', "$buildpath/stamp_install"), "$buildpath/stamp_install exists") ) {
 		@lines = @{readlines(\*FILE)};
+		close(FILE);
 	} 
 	is_deeply( \@lines, [ "DESTDIR=".Cwd::getcwd()."/debian/testpackage" ],
 	    "$buildpath/stamp_install contains DESTDIR" );
@@ -501,37 +509,41 @@ ok ( ! -e 'bld', "bld got deleted too" );
 
 # Test clean_jobserver_makeflags.
 
-$ENV{MAKEFLAGS} = "--jobserver-fds=103,104 -j";
-clean_jobserver_makeflags();
-ok(! exists $ENV{MAKEFLAGS}, "unset makeflags");
+test_clean_jobserver_makeflags('--jobserver-fds=103,104 -j',
+                               undef,
+                               'unset makeflags');
 
-$ENV{MAKEFLAGS} = "-a --jobserver-fds=103,104 -j -b";
-clean_jobserver_makeflags();
-is($ENV{MAKEFLAGS}, "-a -b", "clean makeflags");
+test_clean_jobserver_makeflags('-a --jobserver-fds=103,104 -j -b',
+                               '-a -b',
+                               'clean makeflags');
 
-$ENV{MAKEFLAGS} = " --jobserver-fds=1,2 -j  ";
-clean_jobserver_makeflags();
-ok(! exists $ENV{MAKEFLAGS}, "unset makeflags");
+test_clean_jobserver_makeflags(' --jobserver-fds=1,2 -j  ',
+                               undef,
+                               'unset makeflags');
 
-$ENV{MAKEFLAGS} = "-a -j -b";
-clean_jobserver_makeflags();
-is($ENV{MAKEFLAGS}, "-a -j -b", "clean makeflags does not remove -j");
+test_clean_jobserver_makeflags('-a -j -b',
+                               '-a -j -b',
+                               'clean makeflags does not remove -j');
 
-$ENV{MAKEFLAGS} = "-a --jobs -b";
-clean_jobserver_makeflags();
-is($ENV{MAKEFLAGS}, "-a --jobs -b", "clean makeflags does not remove --jobs");
+test_clean_jobserver_makeflags('-a --jobs -b',
+                               '-a --jobs -b',
+                               'clean makeflags does not remove --jobs');
 
-$ENV{MAKEFLAGS} = "-j6";
-clean_jobserver_makeflags();
-is($ENV{MAKEFLAGS}, "-j6", "clean makeflags does not remove -j6");
+test_clean_jobserver_makeflags('-j6',
+                               '-j6',
+                               'clean makeflags does not remove -j6');
 
-$ENV{MAKEFLAGS} = "-a -j6 --jobs=7";
-clean_jobserver_makeflags();
-is($ENV{MAKEFLAGS}, "-a -j6 --jobs=7", "clean makeflags does not remove -j or --jobs");
+test_clean_jobserver_makeflags('-a -j6 --jobs=7',
+                               '-a -j6 --jobs=7',
+                               'clean makeflags does not remove -j or --jobs');
 
-$ENV{MAKEFLAGS} = "-j6 --jobserver-fds=103,104 --jobs=8";
-clean_jobserver_makeflags();
-is($ENV{MAKEFLAGS}, "-j6 --jobs=8", "jobserver options removed");
+test_clean_jobserver_makeflags('-j6 --jobserver-fds=103,104 --jobs=8',
+                               '-j6 --jobs=8',
+                               'jobserver options removed');
+
+test_clean_jobserver_makeflags('-j6 --jobserver-auth=103,104 --jobs=8',
+                               '-j6 --jobs=8',
+                               'jobserver options removed');
 
 # Test parallel building with makefile build system.
 $ENV{MAKEFLAGS} = "";
@@ -560,6 +572,14 @@ sub test_is_parallel {
 	my ($got, $desc) = @_;
 	is_deeply( $got, [] , $desc );
 	is( $?, 0, "(exit status=0) $desc");
+}
+
+sub test_clean_jobserver_makeflags {
+    my ($orig, $expected, $test) = @_;
+
+    local $ENV{MAKEFLAGS} = $orig;
+    clean_jobserver_makeflags();
+    is($ENV{MAKEFLAGS}, $expected, $test);
 }
 
 test_isnt_parallel( do_parallel_mk(),

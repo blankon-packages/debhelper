@@ -7,8 +7,9 @@
 package Debian::Debhelper::Buildsystem::perl_makemaker;
 
 use strict;
+use warnings;
 use Debian::Debhelper::Dh_Lib qw(compat);
-use base 'Debian::Debhelper::Buildsystem::makefile';
+use parent qw(Debian::Debhelper::Buildsystem::makefile);
 use Config;
 
 sub DESCRIPTION {
@@ -54,11 +55,17 @@ sub configure {
 		push @flags, "LD=$Config{ld} $ENV{CFLAGS} $ENV{LDFLAGS}";
 	}
 
-	$this->doit_in_sourcedir("perl", "Makefile.PL", "INSTALLDIRS=vendor",
+	$this->doit_in_sourcedir("perl", "-I.", "Makefile.PL", "INSTALLDIRS=vendor",
 		# if perl_build is not tested first, need to pass packlist
 		# option to handle fallthrough case
 		(compat(7) ? "create_packlist=0" : ()),
 		@flags, @_);
+}
+
+sub test {
+	my $this=shift;
+	# Make tests verbose
+	$this->SUPER::test("TEST_VERBOSE=1", @_);
 }
 
 sub install {
@@ -78,3 +85,9 @@ sub install {
 }
 
 1
+
+# Local Variables:
+# indent-tabs-mode: t
+# tab-width: 4
+# cperl-indent-level: 4
+# End:

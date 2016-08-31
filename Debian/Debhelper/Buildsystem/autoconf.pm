@@ -7,8 +7,9 @@
 package Debian::Debhelper::Buildsystem::autoconf;
 
 use strict;
+use warnings;
 use Debian::Debhelper::Dh_Lib qw(dpkg_architecture_value sourcepackage compat);
-use base 'Debian::Debhelper::Buildsystem::makefile';
+use parent qw(Debian::Debhelper::Buildsystem::makefile);
 
 sub DESCRIPTION {
 	"GNU Autoconf (configure)"
@@ -21,6 +22,10 @@ sub check_auto_buildable {
 	# Handle configure; the rest - next class (compat with 7.0.x code path)
 	if ($step eq "configure") {
 		return 1 if -x $this->get_sourcepath("configure");
+	}
+	if ($step eq "test") {
+		return 1 if (-e $this->get_buildpath("Makefile") &&
+			     -x $this->get_sourcepath("configure"));
 	}
 	return 0;
 }
@@ -37,6 +42,11 @@ sub configure {
 	push @opts, "--infodir=\${prefix}/share/info";
 	push @opts, "--sysconfdir=/etc";
 	push @opts, "--localstatedir=/var";
+	if (defined $ENV{DH_QUIET} && $ENV{DH_QUIET} ne "") {
+		push @opts, "--enable-silent-rules";
+	} else {
+		push @opts, "--disable-silent-rules";
+	}
 	my $multiarch=dpkg_architecture_value("DEB_HOST_MULTIARCH");
 	if (! compat(8)) {
 	       if (defined $multiarch) {
@@ -72,4 +82,16 @@ sub configure {
 	}
 }
 
+sub test {
+	my $this=shift;
+	$this->make_first_existing_target(['test', 'check'],
+		"VERBOSE=1", @_);
+}
+
 1
+
+# Local Variables:
+# indent-tabs-mode: t
+# tab-width: 4
+# cperl-indent-level: 4
+# End:
