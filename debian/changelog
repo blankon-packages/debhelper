@@ -1,3 +1,111 @@
+debhelper (10.2.2blankon1) tambora; urgency=medium
+
+  * New Upstream Release 
+
+ -- Rahman Yusri Aftian <aftian@blankon.id>  Sat, 22 Oct 2016 21:17:18 +0700
+
+debhelper (10.2.2) unstable; urgency=medium
+
+  * Fix typo in changelog entry for release 10.2.  Thanks to
+    Peter Pentchev for reporting it.
+  * Deprecate all compat levels lower than 9.
+  * dh: Discard override log files before running the override
+    rather than after.
+  * dh_compress,dh_fixperms: Remove references to long
+    obsolete directories such as usr/info, usr/man and
+    usr/X11*/man.
+  * autoreconf.pm: Apply patch from Helmut Grohne to fix
+    autoconf/cross regression from #836988.  The autoreconf
+    build-system is now also used directly for "clean" and
+    "build" (while still usin the "make" build-system for the
+    heavy lifting).  (Closes: #839681)
+  * dh_installdirs: In compat 11, avoid creating debian/<pkg>
+    directories except when required to do so.  This fixes a
+    corner case, where an arch:all build would behave
+    differently than an arch:all+arch:any when dh_installdir is
+    optimised out only for the arch:all build.
+  * Dh_Lib.pm: Fix typo of positive.  Thanks to Matthias Klose
+    for spotting it.
+
+ -- Niels Thykier <niels@thykier.net>  Sat, 08 Oct 2016 10:16:23 +0000
+
+debhelper (10.2.1) unstable; urgency=medium
+
+  * d/rules: Add a ./run in front of dh_auto_install.  It is
+    technically not needed, but it prevents lintian from assuming
+    that we need to Build-Depend debhelper.
+
+ -- Niels Thykier <niels@thykier.net>  Sun, 02 Oct 2016 06:51:49 +0000
+
+debhelper (10.2) unstable; urgency=medium
+
+  * Apply patch from Peter Pentchev to fix some typos.
+  * Apply patch from Michael Biebl to undo a major
+    regression where all of debhelpers functionality was
+    missing (introduced in 10.1).  (Closes: #839557)
+  * dh_installinit,dh_systemd_start: Introduce a new
+    --no-stop-on-upgrade as an alternative to
+    --no-restart-on-upgrade.  This new option should
+    reduce the confusion of what it does.  Thanks to
+    Michael Biebl for the suggestion.
+
+ -- Niels Thykier <niels@thykier.net>  Sun, 02 Oct 2016 06:20:56 +0000
+
+debhelper (10.1) unstable; urgency=medium
+
+  * Apply patch from Michael Biebl to take over dh-systemd
+    package to ease backporting to jessie-backports.
+    (Closes: #837585)
+  * Apply patch from Helmut Grohne and Julian Andres Klode
+    to improve cross-building support in the cmake build
+    system.  (Closes: #833789)
+  * Make the makefile.pm buildsystem (but not subclasses thereof)
+    pass the CC and CXX variables set to the host compilers when
+    cross-building.  Thanks to Helmut Grohne for the idea and
+    the initial patch.  (Closes: #836988)
+  * dh_md5sums.1: Mention dpkg --verify as a consumer of the
+    output file.  Thanks to Guillem Jover for reporting it.
+  * debhelper-obsolete-compat.pod: Add a manpage for the
+    upgrade checklist for all obsolete/removed compat levels.
+    Thanks to Jakub Wilk for the suggestion.
+  * Dh_Getopt,dh_*: Rename --onlyscripts to --only-scripts and
+    --noscripts to --no-scripts for consistency with other
+    options.  The old variants are accepted for compatibility.
+    Thanks to Raphaël Hertzog for the suggestion.
+    (Closes: #838446)
+  * cmake.pm: If cmake fails, also dump CMakeFiles/CMakeOutput.log
+    and CMakeFiles/CMakeError.log if they are present.  Thanks to
+    Michael Banck for the suggestion.  (Closes: #839389)
+  * d/copyright: Correct copyright and license of dh_systemd*
+    tools.
+
+ -- Niels Thykier <niels@thykier.net>  Sat, 01 Oct 2016 20:45:27 +0000
+
+debhelper (10) unstable; urgency=medium
+
+  [ Niels Thykier ]
+  * Dh_Lib.pm: Support a new named "beta-tester" compat level.
+    If you want to participate in beta testing of new compat
+    levels, please review "man 7 debhelper" for more
+    information.
+  * Dh_Lib.pm: Fix bug in detection of existing auto-trigger.
+
+  [ Axel Beckert ]
+  * Apply patch by Jens Reyer to fix typo in dh_installdocs man page.
+    (Closes: #836344)
+  * Use uppercase "Debian" in package description when the project is
+    meant. Fixes lintian warning capitalization-error-in-description.
+  * Apply "wrap-and-sort -a"
+  * Add a .mailmap file for making "git shortlog" work properly.
+
+  [ Translations ]
+  * Update German translation (Chris Leick) (Closes: #835593)
+  * Update Portuguese translation (Américo Monteiro)
+    (Closes: #835403)
+  * Update French translation (Baptiste Jammet) (Closes: #836693)
+
+ -- Niels Thykier <niels@thykier.net>  Sun, 11 Sep 2016 09:00:23 +0000
+
 debhelper (9.20160814blankon1) tambora; urgency=medium
 
   * Rebuild for apt

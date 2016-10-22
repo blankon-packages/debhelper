@@ -302,6 +302,11 @@ These are the available compatibility levels:
 
 This is the lowest supported compatibility level.
 
+If you are upgrading from an earlier compatibility level, please
+review L<debhelper-obsolete-compat(7)>.
+
+This mode is deprecated.
+
 =item v6
 
 Changes from v5 are:
@@ -332,6 +337,8 @@ directory. In previous compatibility levels it silently refuses to do this.
 
 =back
 
+This mode is deprecated.
+
 =item v7
 
 Changes from v6 are:
@@ -359,6 +366,8 @@ B<dh_installchangelogs> will guess at what file is the upstream changelog if
 none is specified.
 
 =back
+
+This mode is deprecated.
 
 =item v8
 
@@ -389,9 +398,9 @@ B<dh_auto_>I<*> prefer to use Perl's B<Module::Build> in preference to F<Makefil
 
 =back
 
-=item v9
+This mode is deprecated.
 
-This is the recommended mode of operation.
+=item v9
 
 Changes from v8 are:
 
@@ -448,7 +457,8 @@ configuration.
 
 =item v10
 
-This compatibility level is open for beta testing; changes may occur.
+This is the recommended mode of operation.
+
 
 Changes from v9 are:
 
@@ -501,7 +511,7 @@ The B<dh> command will no longer use log files to track which commands
 have been run.  The B<dh> command I<still> keeps track of whether it
 already ran the "build" sequence and skip it if it did.
 
-The main affects of this are:
+The main effects of this are:
 
 =over 4
 
@@ -515,7 +525,7 @@ do a full "clean and rebuild" cycle)
 
 The main caveat is that B<dh_*> now only keeps track of what happened
 in a single override target.  When all the calls to a given B<dh_cmd>
-command happens in the same override target every thing will work as
+command happens in the same override target everything will work as
 before.
 
 Example of where it can go wrong:
@@ -536,8 +546,8 @@ B<-a>, B<-i>, etc.
 
 =item -
 
-The B<dh_installdeb> command now shell escapes the lines in the
-F<maintscript> config file.  This was the original intend but it did
+The B<dh_installdeb> command now shell-escapes the lines in the
+F<maintscript> config file.  This was the original intent but it did
 not work properly and packages have begun to rely on the incomplete
 shell escaping (e.g. quoting file names).
 
@@ -595,9 +605,73 @@ B<--mainpackage> option.
 
 Please remember to check/update your doc-base files.
 
+=item -
+
+B<dh_installdirs> no longer creates debian/I<package> directories
+unless explicitly requested (or it has to create a subdirectory in
+it).
+
+The vast majority of all packages will be unaffected by this change.
+
 =back
 
 =back
+
+=head2 Participating in the open beta testing of new compat levels
+
+It is possible to opt-in to the open beta testing of new compat
+levels.  This is done by setting the compat level to the string
+"beta-tester".
+
+Packages using this compat level will automatically be upgraded to the
+highest compatibility level in open beta.  In periods without any open
+beta versions, the compat level will be the highest stable
+compatibility level.
+
+Please consider the following before opting in:
+
+=over 4
+
+=item *
+
+The automatic upgrade in compatibility level may cause the package (or
+a feature in it) to stop functioning.
+
+=item *
+
+Compatibility levels in open beta are still subject to change.  We
+will try to keep the changes to a minimal once the beta starts.
+However, there are no guarantees that the compat will not change
+during the beta.
+
+=item *
+
+We will notify you via debian-devel@lists.debian.org before we start a
+new open beta compat level.  However, once the beta starts we expect
+that you keep yourself up to date on changes to debhelper.
+
+=item *
+
+The "beta-tester" compatibility version in unstable and testing will
+often be different than the one in stable-backports.  Accordingly, it
+is not recommended for packages being backported regularly.
+
+=item *
+
+You can always opt-out of the beta by resetting the compatibility
+level of your package to a stable version.
+
+=back
+
+Should you still be interested in the open beta testing, please run:
+
+  % echo beta-tester > debian/compat
+
+You will also need to ensure that debian/control contains:
+
+  Build-Depends: debhelper (>= 9.20160815~)
+
+To ensure that debhelper knows about the "beta-tester" compat level.
 
 =head1 NOTES
 
